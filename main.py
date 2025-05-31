@@ -112,6 +112,28 @@ with st.sidebar.form("option_inputs"):
     
     submitted = st.form_submit_button("Calculate Options")
 
+# Custom Market Prices Section
+st.sidebar.markdown("---")
+st.sidebar.header("💰 Custom Market Prices")
+
+with st.sidebar.form("custom_prices"):
+    st.subheader("Market Option Prices")
+    use_custom_prices = st.checkbox("Use Custom Market Prices", help="")
+    
+    custom_call_price = st.number_input("Market Call Price ($)", 
+                                       min_value=0.0, 
+                                       value=10.0, 
+                                       step=0.01,
+                                       help="")
+    
+    custom_put_price = st.number_input("Market Put Price ($)", 
+                                      min_value=0.0, 
+                                      value=8.0, 
+                                      step=0.01,
+                                      help="")
+    
+    custom_submitted = st.form_submit_button("Compare with Market")
+
 # Heatmap controls
 st.sidebar.markdown("---")
 st.sidebar.header("🔥 Heatmap Controls")
@@ -160,14 +182,14 @@ if submitted:
     
     with col1:
         st.subheader("📈 Call Option")
-        st.metric("Call Price", f"${call_price:.4f}")
+        st.metric("Theoretical Call Price", f"${call_price:.4f}")
         st.metric("Delta", f"{greeks['call_delta']:.4f}")
         st.metric("Theta", f"{greeks['call_theta']:.4f}")
         st.metric("Rho", f"{greeks['call_rho']:.4f}")
     
     with col2:
         st.subheader("📉 Put Option")
-        st.metric("Put Price", f"${put_price:.4f}")
+        st.metric("Theoretical Put Price", f"${put_price:.4f}")
         st.metric("Delta", f"{greeks['put_delta']:.4f}")
         st.metric("Theta", f"{greeks['put_theta']:.4f}")
         st.metric("Rho", f"{greeks['put_rho']:.4f}")
@@ -218,6 +240,67 @@ if submitted:
                  f"{greeks['put_theta']:.4f}", f"{greeks['vega']:.4f}", f"{greeks['call_rho']:.4f}", f"{greeks['put_rho']:.4f}"]
     }
     st.table(pd.DataFrame(summary_data))
+
+# Custom Price Comparison
+if custom_submitted and use_custom_prices:
+    # Calculate theoretical prices for comparison
+    call_price = black_scholes_call(S, K, T, r, sigma)
+    put_price = black_scholes_put(S, K, T, r, sigma)
+    
+    st.subheader("🔍 Market vs Theoretical Price Comparison")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📈 Call Option Analysis")
+        call_diff = custom_call_price - call_price
+        st.metric("Market Call Price", f"${custom_call_price:.4f}")
+        st.metric("Theoretical Call Price", f"${call_price:.4f}")
+        st.metric("Price Difference", f"${call_diff:.4f}", 
+                 delta=f"{(call_diff/call_price)*100:.2f}%" if call_price != 0 else "N/A")
+        
+        if abs(call_diff) > 0.5:
+            if call_diff > 0:
+                st.error(f"📉 Call Option appears OVERVALUED by ${call_diff:.2f}")
+                st.markdown("**Suggestion:** Consider selling or avoid buying")
+            else:
+                st.success(f"📈 Call Option appears UNDERVALUED by ${abs(call_diff):.2f}")
+                st.markdown("**Suggestion:** Consider buying")
+        else:
+            st.info("📊 Call Option appears fairly priced")
+    
+    with col2:
+        st.subheader("📉 Put Option Analysis")
+        put_diff = custom_put_price - put_price
+        st.metric("Market Put Price", f"${custom_put_price:.4f}")
+        st.metric("Theoretical Put Price", f"${put_price:.4f}")
+        st.metric("Price Difference", f"${put_diff:.4f}", 
+                 delta=f"{(put_diff/put_price)*100:.2f}%" if put_price != 0 else "N/A")
+        
+        if abs(put_diff) > 0.5:
+            if put_diff > 0:
+                st.error(f"📉 Put Option appears OVERVALUED by ${put_diff:.2f}")
+                st.markdown("**Suggestion:** Consider selling or avoid buying")
+            else:
+                st.success(f"📈 Put Option appears UNDERVALUED by ${abs(put_diff):.2f}")
+                st.markdown("**Suggestion:** Consider buying")
+        else:
+            st.info("📊 Put Option appears fairly priced")
+    
+    # Comparison table
+    st.subheader("📊 Detailed Comparison Table")
+    comparison_data = {
+        'Option Type': ['Call Option', 'Put Option'],
+        'Market Price': [f"${custom_call_price:.4f}", f"${custom_put_price:.4f}"],
+        'Theoretical Price': [f"${call_price:.4f}", f"${put_price:.4f}"],
+        'Difference ($)': [f"${call_diff:.4f}", f"${put_diff:.4f}"],
+        'Difference (%)': [f"{(call_diff/call_price)*100:.2f}%" if call_price != 0 else "N/A",
+                          f"{(put_diff/put_price)*100:.2f}%" if put_price != 0 else "N/A"],
+        'Assessment': ['Overvalued' if call_diff > 0.5 else 'Undervalued' if call_diff < -0.5 else 'Fair',
+                      'Overvalued' if put_diff > 0.5 else 'Undervalued' if put_diff < -0.5 else 'Fair']
+    }
+    st.table(pd.DataFrame(comparison_data))
+
 if heatmap_submitted:
     # Validate inputs
     if max_spot <= min_spot:
@@ -280,6 +363,11 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("ℹ️ About")
 st.sidebar.markdown("""
 This calculator uses the Black-Scholes model to price European options.
+
+**Custom Price Features:**
+- Input actual market prices for comparison
+- Get trading recommendations based on mispricing
+- Analyze percentage differences between theoretical and market prices
 
 **Heatmap Features:**
 - **Green**: Higher option values
