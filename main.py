@@ -51,7 +51,23 @@ def calculate_greeks(S, K, T, r, sigma):
         'vega': vega, 'call_rho': call_rho, 'put_rho': put_rho
     }
 
-# Streamlit app
+def create_heatmap(K, T, r, min_spot, max_spot, min_vol, max_vol, option_type='call'):
+    """Create heatmap data for option prices"""
+    spot_prices = np.linspace(min_spot, max_spot, 50)
+    volatilities = np.linspace(min_vol, max_vol, 50)
+    
+    heatmap_data = np.zeros((len(volatilities), len(spot_prices)))
+    
+    for i, vol in enumerate(volatilities):
+        for j, spot in enumerate(spot_prices):
+            if option_type == 'call':
+                heatmap_data[i, j] = black_scholes_call(spot, K, T, r, vol)
+            else:
+                heatmap_data[i, j] = black_scholes_put(spot, K, T, r, vol)
+    
+    return heatmap_data, spot_prices, volatilities
+
+# Streamlit app configuration
 st.set_page_config(page_title="Black-Scholes Option Pricing Calculator", layout="wide")
 
 st.title("🎯 Black-Scholes Option Pricing Calculator")
@@ -62,17 +78,76 @@ st.sidebar.header("📊 Option Parameters")
 
 with st.sidebar.form("option_inputs"):
     st.subheader("Market Parameters")
-    S = st.number_input("Current Asset Price ($)", min_value=0.01, value=100.0, step=0.01)
-    K = st.number_input("Strike Price ($)", min_value=0.01, value=105.0, step=0.01)
+    S = st.number_input("Current Asset Price ($)", 
+                       min_value=0.01, 
+                       value=100.0, 
+                       step=0.01,
+                       help="")
+    
+    K = st.number_input("Strike Price ($)", 
+                       min_value=0.01, 
+                       value=105.0, 
+                       step=0.01,
+                       help="")
     
     st.subheader("Time and Rates")
-    T = st.number_input("Time to Maturity (years)", min_value=0.001, value=1.0, step=0.01)
-    r = st.number_input("Risk-Free Rate (%)", min_value=0.0, value=5.0, step=0.1) / 100
+    T = st.number_input("Time to Maturity (years)", 
+                       min_value=0.001, 
+                       value=1.0, 
+                       step=0.01,
+                       help="")
+    
+    r = st.number_input("Risk-Free Rate (%)", 
+                       min_value=0.0, 
+                       value=5.0, 
+                       step=0.1,
+                       help="") / 100
     
     st.subheader("Volatility")
-    sigma = st.number_input("Volatility (%)", min_value=0.1, value=20.0, step=0.1) / 100
+    sigma = st.number_input("Volatility (%)", 
+                           min_value=0.1, 
+                           value=20.0, 
+                           step=0.1,
+                           help="") / 100
     
     submitted = st.form_submit_button("Calculate Options")
+
+# Heatmap controls
+st.sidebar.markdown("---")
+st.sidebar.header("🔥 Heatmap Controls")
+
+with st.sidebar.form("heatmap_inputs"):
+    st.subheader("Spot Price Range")
+    min_spot = st.number_input("Minimum Spot Price ($)", 
+                              min_value=0.01, 
+                              value=80.0, 
+                              step=1.0,
+                              help="")
+    
+    max_spot = st.number_input("Maximum Spot Price ($)", 
+                              min_value=0.01, 
+                              value=120.0, 
+                              step=1.0,
+                              help="")
+    
+    st.subheader("Volatility Range")
+    min_vol = st.number_input("Minimum Volatility (%)", 
+                             min_value=0.1, 
+                             value=10.0, 
+                             step=0.1,
+                             help="") / 100
+    
+    max_vol = st.number_input("Maximum Volatility (%)", 
+                             min_value=0.1, 
+                             value=50.0, 
+                             step=0.1,
+                             help="") / 100
+    
+    option_type = st.selectbox("Option Type for Heatmap", 
+                              ["call", "put"], 
+                              help="")
+    
+    heatmap_submitted = st.form_submit_button("Generate Heatmap")
 
 if submitted:
     # Calculate option prices
@@ -104,7 +179,7 @@ if submitted:
         st.metric("Gamma", f"{greeks['gamma']:.6f}")
     with col4:
         st.metric("Vega", f"{greeks['vega']:.4f}")
-    
+
     # Sensitivity Analysis
     st.subheader("📊 Sensitivity Analysis")
     
@@ -143,6 +218,62 @@ if submitted:
                  f"{greeks['put_theta']:.4f}", f"{greeks['vega']:.4f}", f"{greeks['call_rho']:.4f}", f"{greeks['put_rho']:.4f}"]
     }
     st.table(pd.DataFrame(summary_data))
+if heatmap_submitted:
+    # Validate inputs
+    if max_spot <= min_spot:
+        st.error("Maximum spot price must be greater than minimum spot price")
+    elif max_vol <= min_vol:
+        st.error("Maximum volatility must be greater than minimum volatility")
+    else:
+        # Generate heatmap
+        st.subheader(f"🔥 {option_type.capitalize()} Option Price Heatmap")
+        
+        with st.spinner("Generating heatmap..."):
+            heatmap_data, spot_prices, volatilities = create_heatmap(
+                K, T, r, min_spot, max_spot, min_vol, max_vol, option_type
+            )
+            
+            # Create the heatmap using Plotly
+            fig_heatmap = go.Figure(data=go.Heatmap(
+                z=heatmap_data,
+                x=np.round(spot_prices, 2),
+                y=np.round(volatilities * 100, 1),  # Convert to percentage
+                colorscale='RdYlGn',  # Red to Yellow to Green
+                hoverongaps=False,
+                hovertemplate='Spot Price: $%{x}<br>Volatility: %{y}%<br>Option Price: $%{z:.4f}<extra></extra>'
+            ))
+            
+            fig_heatmap.update_layout(
+                title=f"{option_type.capitalize()} Option Prices (Strike: ${K}, Time: {T} years, Rate: {r*100:.1f}%)",
+                xaxis_title="Spot Price ($)",
+                yaxis_title="Volatility (%)",
+                width=800,
+                height=600
+            )
+            
+            # Add current position marker if within range
+            if min_spot <= S <= max_spot and min_vol <= sigma <= max_vol:
+                fig_heatmap.add_scatter(
+                    x=[S], 
+                    y=[sigma * 100], 
+                    mode='markers',
+                    marker=dict(size=15, color='blue', symbol='x'),
+                    name='Current Position',
+                    hovertemplate=f'Current Position<br>Spot: ${S}<br>Volatility: {sigma*100:.1f}%<extra></extra>'
+                )
+            
+            st.plotly_chart(fig_heatmap, use_container_width=True)
+            
+            # Heatmap statistics
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Min Price", f"${np.min(heatmap_data):.4f}")
+            with col2:
+                st.metric("Max Price", f"${np.max(heatmap_data):.4f}")
+            with col3:
+                st.metric("Mean Price", f"${np.mean(heatmap_data):.4f}")
+            with col4:
+                st.metric("Std Dev", f"${np.std(heatmap_data):.4f}")
 
 # Information section
 st.sidebar.markdown("---")
@@ -150,17 +281,23 @@ st.sidebar.subheader("ℹ️ About")
 st.sidebar.markdown("""
 This calculator uses the Black-Scholes model to price European options.
 
+**Heatmap Features:**
+- **Green**: Higher option values
+- **Red**: Lower option values
+- **Blue X**: Current position (if within range)
+- Interactive hover for precise values
+
 **Parameters:**
 - **S**: Current asset price
 - **K**: Strike price
 - **T**: Time to maturity (years)
 - **r**: Risk-free rate (decimal)
 - **σ**: Volatility (decimal)
-
+                    
 **Greeks:**
 - **Delta**: Price sensitivity to underlying
 - **Gamma**: Delta sensitivity to underlying
 - **Theta**: Time decay
 - **Vega**: Volatility sensitivity
-- **Rho**: Interest rate sensitivity
+- **Rho**: Interest rate sensitivity                    
 """)
