@@ -4,6 +4,122 @@ from scipy.stats import norm
 import plotly.graph_objects as go
 import plotly.express as px
 import pandas as pd
+import mysql.connector
+from datetime import datetime
+
+
+
+
+# Database connection function
+@st.cache_resource
+def init_connection():
+    """Initialize MySQL connection using Streamlit secrets"""
+    try:
+        # crash the app
+        return mysql.connector.connect(**st.secrets["mysql"])
+        
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
+        return None
+    
+
+# use a global variable to store the connection
+conn = None
+
+
+def save_calculation_to_db(S, K, T, r, sigma, call_price, put_price):
+    """Save calculation inputs and outputs to MySQL database"""
+    try:
+        if conn is None:
+            print("❌ Database Connection Failed")
+            st.error("❌ Database Connection Failed")
+            return None
+            
+        cursor = conn.cursor()
+
+        # Insert into BlackScholesInputs table
+        input_query = """
+        INSERT INTO BlackScholesInputs 
+        (CurrentAssetPrice, StrikePrice, TimeToMaturity, RiskFreeRate, Volatility) 
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(input_query, (S, K, T, r, sigma))
+        
+        # Get the CalculationId of the inserted record
+        calculation_id = cursor.lastrowid
+        
+        # Insert Call Option into BlackScholesOutputs table
+        output_query = """
+        INSERT INTO BlackScholesOutputs 
+        (VolatilityShock, StockPriceShock, OptionPrice, IsCall, CalculationId) 
+        VALUES (%s, %s, %s, %s, %s)
+        """
+        cursor.execute(output_query, (sigma, S, call_price, 1, calculation_id))
+        
+        # Insert Put Option into BlackScholesOutputs table
+        cursor.execute(output_query, (sigma, S, put_price, 0, calculation_id))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        return calculation_id
+        
+    except mysql.connector.Error as err:
+        st.error(f"Database error: {err}")
+        return None
+    except Exception as e:
+        st.error(f"Error saving to database: {e}")
+        return None
+
+def get_calculation_history():
+    """Retrieve calculation history from database"""
+    try:
+        # conn = init_connection()
+        if conn is None:
+            return pd.DataFrame()
+            
+        cursor = conn.cursor()
+        
+        query = """
+        SELECT 
+            i.CalculationId,
+            i.CurrentAssetPrice,
+            i.StrikePrice,
+            i.TimeToMaturity,
+            i.RiskFreeRate,
+            i.Volatility,
+            i.CalculationTimestamp,
+            o.OptionPrice,
+            o.IsCall
+        FROM BlackScholesInputs i
+        JOIN BlackScholesOutputs o ON i.CalculationId = o.CalculationId
+        ORDER BY i.CalculationTimestamp DESC
+        LIMIT 50
+        """
+        
+        cursor.execute(query)
+        results = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        if results:
+            df = pd.DataFrame(results, columns=[
+                'CalculationId', 'CurrentAssetPrice', 'StrikePrice', 
+                'TimeToMaturity', 'RiskFreeRate', 'Volatility', 
+                'CalculationTimestamp', 'OptionPrice', 'IsCall'
+            ])
+            return df
+        else:
+            return pd.DataFrame()
+            
+    except mysql.connector.Error as err:
+        st.error(f"Database error: {err}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error retrieving from database: {e}")
+        return pd.DataFrame()
 
 # Black-Scholes calculation functions
 def black_scholes_call(S, K, T, r, sigma):
@@ -70,8 +186,20 @@ def create_heatmap(K, T, r, min_spot, max_spot, min_vol, max_vol, option_type='c
 # Streamlit app configuration
 st.set_page_config(page_title="Black-Scholes Option Pricing Calculator", layout="wide")
 
-st.title("🎯 Black-Scholes Option Pricing Calculator")
+st.title("🎯 Black-Scholes Option Pricing Calculator with Database Storage")
 st.markdown("Calculate European option prices and Greeks using the Black-Scholes model")
+
+
+conn = init_connection()
+# Database status indicator
+# conn_test = init_connection()
+conn_test = conn
+
+if conn_test:
+    st.sidebar.success("✅ Database Connected")
+    # conn_test.close()
+else:
+    st.sidebar.error("❌ Database Connection Failed")
 
 # Sidebar for inputs
 st.sidebar.header("📊 Option Parameters")
@@ -176,6 +304,14 @@ if submitted:
     call_price = black_scholes_call(S, K, T, r, sigma)
     put_price = black_scholes_put(S, K, T, r, sigma)
     greeks = calculate_greeks(S, K, T, r, sigma)
+    
+    # Save to database
+    calculation_id = save_calculation_to_db(S, K, T, r, sigma, call_price, put_price)
+    
+    if calculation_id:
+        st.success(f"✅ Calculation saved to database with ID: {calculation_id}")
+    else:
+        st.warning("⚠️ Could not save to database")
     
     # Main results display
     col1, col2 = st.columns(2)
@@ -358,11 +494,69 @@ if heatmap_submitted:
             with col4:
                 st.metric("Std Dev", f"${np.std(heatmap_data):.4f}")
 
+# Database History Section
+st.sidebar.markdown("---")
+if st.sidebar.button("📊 View Calculation History"):
+    st.subheader("📈 Calculation History")
+    
+    history_df = get_calculation_history()
+    
+    if not history_df.empty:
+        # Pivot the data to show call and put prices in separate columns
+        call_df = history_df[history_df['IsCall'] == 1].copy()
+        put_df = history_df[history_df['IsCall'] == 0].copy()
+        
+        # Merge call and put data
+        merged_df = call_df.merge(
+            put_df[['CalculationId', 'OptionPrice']], 
+            on='CalculationId', 
+            suffixes=('_Call', '_Put')
+        )
+        
+        # Clean up the dataframe
+        display_df = merged_df[[
+            'CalculationId', 'CurrentAssetPrice', 'StrikePrice', 
+            'TimeToMaturity', 'RiskFreeRate', 'Volatility',
+            'OptionPrice_Call', 'OptionPrice_Put', 'CalculationTimestamp'
+        ]].copy()
+        
+        display_df.columns = [
+            'ID', 'Asset Price', 'Strike', 'Time to Maturity', 
+            'Risk-Free Rate', 'Volatility', 'Call Price', 'Put Price', 'Timestamp'
+        ]
+        
+        st.dataframe(display_df, use_container_width=True)
+        
+        # Summary statistics
+        st.subheader("📊 Summary Statistics")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric("Total Calculations", len(display_df))
+        with col2:
+            st.metric("Avg Call Price", f"${display_df['Call Price'].mean():.4f}")
+        with col3:
+            st.metric("Avg Put Price", f"${display_df['Put Price'].mean():.4f}")
+        with col4:
+            st.metric("Avg Asset Price", f"${display_df['Asset Price'].mean():.2f}")
+    else:
+        st.info("No calculation history found in the database.")
+
 # Information section
 st.sidebar.markdown("---")
-st.sidebar.subheader("ℹ️ About")
+st.sidebar.subheader("ℹ️ Database Integration")
 st.sidebar.markdown("""
-This calculator uses the Black-Scholes model to price European options.
+**Database Features:**
+- Automatic saving of all calculations
+- Separate tables for inputs and outputs
+- Calculation history tracking
+- Timestamp recording
+- Relational data structure
+
+**Data Storage:**
+- **Inputs**: Asset price, strike, time, rate, volatility
+- **Outputs**: Call and put prices with volatility/price shocks
+- **Relationships**: Linked via CalculationId
 
 **Custom Price Features:**
 - Input actual market prices for comparison
